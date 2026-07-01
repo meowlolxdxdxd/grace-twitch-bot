@@ -26,41 +26,52 @@ if (!OAUTH_TOKEN) { console.error('❌ Нет TWITCH_OAUTH_TOKEN'); process.exit
 const ROOM_ID = process.env.ROOM_ID || "-OvMNH8xsdICOW0tzqa7";
 const QR_PERMISSION = (process.env.QR_PERMISSION || "all").toLowerCase();
 
-// Заголовки, чтобы притвориться браузером
+// Заголовки браузера
 const browserHeaders = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'image/png,image/*;q=0.8,*/*;q=0.5'
+  'Accept': 'image/png,image/*;q=0.8'
 };
+
+// Проверка, что буфер является PNG (первые 8 байт)
+function isPNG(buffer) {
+  if (!buffer || buffer.length < 8) return false;
+  return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
+}
+
+// Проверка, что буфер является JPEG
+function isJPEG(buffer) {
+  if (!buffer || buffer.length < 3) return false;
+  return buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+}
 
 // ========== Генерация картинки ==========
 async function generateTelegramStyleQR(url) {
-  // --- 1. Пытаемся загрузить официальный QR-код Telegram ---
+  // --- 1. QR-код (пытаемся Telegram, иначе запасной) ---
   let qrBuffer = null;
   try {
     const tgQrUrl = `https://t.me/qrcode?url=${encodeURIComponent(url)}`;
     console.log('Запрашиваю QR у Telegram:', tgQrUrl);
     const res = await fetch(tgQrUrl, { headers: browserHeaders });
     if (res.ok) {
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('image')) {
-        qrBuffer = await res.buffer();
+      const buf = await res.buffer();
+      if (isPNG(buf) || isJPEG(buf)) {
+        qrBuffer = buf;
+        console.log('✅ Получен QR от Telegram');
       } else {
-        console.warn('Telegram вернул не изображение, content-type:', contentType);
+        console.warn('Telegram вернул не изображение, использую запасной генератор');
       }
-    } else {
-      console.warn('Ошибка Telegram QR:', res.status);
     }
   } catch (e) {
-    console.warn('Ошибка запроса к Telegram:', e.message);
+    console.warn('Ошибка Telegram QR, использую запасной:', e.message);
   }
 
-  // Если не получилось, берём qrserver.com (без логотипа, но с круглыми элементами)
   if (!qrBuffer) {
-    console.log('Использую fallback qrserver.com');
-    const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}&bgcolor=255-255-255&color=0-0-0&format=png&qzone=2&margin=0&ecc=M&eye=frame13&body=circle`;
+    const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}&bgcolor=255-255-255&color=0-0-0&format=png&eye=frame13&body=circle`;
+    console.log('Использую fallback QR:', fallbackUrl);
     const res = await fetch(fallbackUrl, { headers: browserHeaders });
     if (!res.ok) throw new Error(`Fallback QR error ${res.status}`);
     qrBuffer = await res.buffer();
+    console.log('✅ Получен fallback QR');
   }
 
   // --- 2. Аватарка канала (если публичный) ---
@@ -71,10 +82,12 @@ async function generateTelegramStyleQR(url) {
       const username = u.pathname.replace(/\//g, '');
       const avatarUrl = `https://t.me/i/userpic/320/${username}.jpg`;
       const res = await fetch(avatarUrl, { headers: browserHeaders });
-      if (res.ok) avatarBuffer = await res.buffer();
+      if (res.ok) {
+        const buf = await res.buffer();
+        if (isJPEG(buf) || isPNG(buf)) avatarBuffer = buf;
+      }
     }
   } catch (e) {}
-  // fallback – иконка Telegram
   if (!avatarBuffer) {
     try {
       const res = await fetch('https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/240px-Telegram_logo.svg.png', { headers: browserHeaders });
@@ -91,46 +104,52 @@ async function generateTelegramStyleQR(url) {
     }
   } catch (e) {}
 
-  // --- 4. SVG с ником ---
-  const svgText = `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="60">
-    <text x="50%" y="40" font-size="24" font-family="Arial, sans-serif" font-weight="bold" fill="#000000" text-anchor="middle">${nickname}</text>
-  </svg>`;
+  // --- 4. Сборка ---
+  const width = 500, height = 600;
+  const avatarSize = avatarBuffer ? 100 : 0;
+  const qrSize = 300;
+  const avatarTop = 30;
+  const qrTop = avatarSize > 0 ? (avatarTop + avatarSize + 30) : 60;
 
-  // --- 5. Собираем финальную картинку 500×600 ---
-  const layers = [];
+  const composites = [];
 
-  // Аватарка (100×100) сверху по центру
+  // Аватарка
   if (avatarBuffer) {
-    layers.push({
-      input: await sharp(avatarBuffer).resize(100, 100).png().toBuffer(),
-      top: 30,
-      left: Math.round((500 - 100) / 2)
+    const resizedAvatar = await sharp(avatarBuffer).resize(avatarSize, avatarSize).png().toBuffer();
+    composites.push({
+      input: resizedAvatar,
+      top: avatarTop,
+      left: Math.round((width - avatarSize) / 2)
     });
   }
 
-  // QR-код (300×300) под аватаркой
-  layers.push({
-    input: await sharp(qrBuffer).resize(300, 300).png().toBuffer(),
-    top: 160,
-    left: Math.round((500 - 300) / 2)
+  // QR-код
+  const resizedQR = await sharp(qrBuffer).resize(qrSize, qrSize).png().toBuffer();
+  composites.push({
+    input: resizedQR,
+    top: qrTop,
+    left: Math.round((width - qrSize) / 2)
   });
 
-  // Ник
-  layers.push({
-    input: Buffer.from(svgText),
-    top: 500,
-    left: 0
-  });
-
-  return sharp({
+  // Создаём базовое изображение
+  const base = sharp({
     create: {
-      width: 500,
-      height: 600,
+      width,
+      height,
       channels: 3,
       background: '#ffffff'
     }
-  })
-    .composite(layers)
+  }).composite(composites);
+
+  // Добавляем текст (ник) через SVG overlay
+  const textSvg = Buffer.from(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="60">
+      <text x="50%" y="40" font-size="24" font-family="Arial, sans-serif" font-weight="bold" fill="#000000" text-anchor="middle">${nickname}</text>
+    </svg>
+  `);
+
+  return base
+    .composite([{ input: textSvg, top: height - 70, left: 0 }])
     .png()
     .toBuffer();
 }
