@@ -26,34 +26,63 @@ if (!OAUTH_TOKEN) { console.error('❌ Нет TWITCH_OAUTH_TOKEN'); process.exit
 const ROOM_ID = process.env.ROOM_ID || "-OvMNH8xsdICOW0tzqa7";
 const QR_PERMISSION = (process.env.QR_PERMISSION || "all").toLowerCase();
 
-// ========== Генерация картинки (sharp) ==========
-async function generateTelegramStyleQR(url) {
-  // 1. Получаем официальный QR-код Telegram
-  const tgQrUrl = `https://t.me/qrcode?url=${encodeURIComponent(url)}`;
-  const qrRes = await fetch(tgQrUrl);
-  if (!qrRes.ok) throw new Error(`Ошибка загрузки QR от Telegram: ${qrRes.status}`);
-  const qrBuffer = await qrRes.buffer();
+// Заголовки, чтобы притвориться браузером
+const browserHeaders = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'image/png,image/*;q=0.8,*/*;q=0.5'
+};
 
-  // 2. Аватарка канала (если публичный)
+// ========== Генерация картинки ==========
+async function generateTelegramStyleQR(url) {
+  // --- 1. Пытаемся загрузить официальный QR-код Telegram ---
+  let qrBuffer = null;
+  try {
+    const tgQrUrl = `https://t.me/qrcode?url=${encodeURIComponent(url)}`;
+    console.log('Запрашиваю QR у Telegram:', tgQrUrl);
+    const res = await fetch(tgQrUrl, { headers: browserHeaders });
+    if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('image')) {
+        qrBuffer = await res.buffer();
+      } else {
+        console.warn('Telegram вернул не изображение, content-type:', contentType);
+      }
+    } else {
+      console.warn('Ошибка Telegram QR:', res.status);
+    }
+  } catch (e) {
+    console.warn('Ошибка запроса к Telegram:', e.message);
+  }
+
+  // Если не получилось, берём qrserver.com (без логотипа, но с круглыми элементами)
+  if (!qrBuffer) {
+    console.log('Использую fallback qrserver.com');
+    const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}&bgcolor=255-255-255&color=0-0-0&format=png&qzone=2&margin=0&ecc=M&eye=frame13&body=circle`;
+    const res = await fetch(fallbackUrl, { headers: browserHeaders });
+    if (!res.ok) throw new Error(`Fallback QR error ${res.status}`);
+    qrBuffer = await res.buffer();
+  }
+
+  // --- 2. Аватарка канала (если публичный) ---
   let avatarBuffer = null;
   try {
     const u = new URL(url);
     if (u.hostname === 't.me' || u.hostname === 'telegram.me') {
       const username = u.pathname.replace(/\//g, '');
       const avatarUrl = `https://t.me/i/userpic/320/${username}.jpg`;
-      const res = await fetch(avatarUrl);
+      const res = await fetch(avatarUrl, { headers: browserHeaders });
       if (res.ok) avatarBuffer = await res.buffer();
     }
   } catch (e) {}
   // fallback – иконка Telegram
   if (!avatarBuffer) {
     try {
-      const res = await fetch('https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/240px-Telegram_logo.svg.png');
+      const res = await fetch('https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/240px-Telegram_logo.svg.png', { headers: browserHeaders });
       if (res.ok) avatarBuffer = await res.buffer();
     } catch (e) {}
   }
 
-  // 3. Ник
+  // --- 3. Ник ---
   let nickname = 'Telegram';
   try {
     const u = new URL(url);
@@ -62,31 +91,48 @@ async function generateTelegramStyleQR(url) {
     }
   } catch (e) {}
 
-  // Создаём текстовый слой (SVG)
-  const svgText = `<svg width="500" height="60"><text x="50%" y="40" font-size="24" font-family="Arial" font-weight="bold" fill="black" text-anchor="middle">${nickname}</text></svg>`;
+  // --- 4. SVG с ником ---
+  const svgText = `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="60">
+    <text x="50%" y="40" font-size="24" font-family="Arial, sans-serif" font-weight="bold" fill="#000000" text-anchor="middle">${nickname}</text>
+  </svg>`;
 
-  // Сборка итоговой картинки 500x600
+  // --- 5. Собираем финальную картинку 500×600 ---
   const layers = [];
-  // фон (белый)
-  layers.push({ input: { create: { width: 500, height: 600, channels: 3, background: '#ffffff' } } });
 
-  // аватарка (100x100) сверху по центру
+  // Аватарка (100×100) сверху по центру
   if (avatarBuffer) {
-    layers.push({ input: avatarBuffer, top: 30, left: Math.round((500 - 100) / 2), width: 100, height: 100 });
+    layers.push({
+      input: await sharp(avatarBuffer).resize(100, 100).png().toBuffer(),
+      top: 30,
+      left: Math.round((500 - 100) / 2)
+    });
   }
 
-  // QR-код (300x300) под аватаркой (центрируем)
-  layers.push({ input: qrBuffer, top: 160, left: Math.round((500 - 300) / 2), width: 300, height: 300 });
+  // QR-код (300×300) под аватаркой
+  layers.push({
+    input: await sharp(qrBuffer).resize(300, 300).png().toBuffer(),
+    top: 160,
+    left: Math.round((500 - 300) / 2)
+  });
 
-  // текст (SVG) снизу
-  layers.push({ input: Buffer.from(svgText), top: 500, left: 0 });
+  // Ник
+  layers.push({
+    input: Buffer.from(svgText),
+    top: 500,
+    left: 0
+  });
 
-  const output = await sharp({ create: { width: 500, height: 600, channels: 3, background: '#ffffff' } })
+  return sharp({
+    create: {
+      width: 500,
+      height: 600,
+      channels: 3,
+      background: '#ffffff'
+    }
+  })
     .composite(layers)
     .png()
     .toBuffer();
-
-  return output;
 }
 
 // ========== Twitch чат ==========
@@ -150,7 +196,6 @@ client.on('message', async (channel, tags, message, self) => {
 
     setTimeout(() => {
       newItemRef.remove().catch(() => {});
-      // Удаляем файл из Supabase
       supabase.storage.from('overlay').remove([`tts/${filename}`]).catch(() => {});
     }, 15000);
   } catch (e) {
