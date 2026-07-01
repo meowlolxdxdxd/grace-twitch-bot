@@ -36,11 +36,14 @@ const ROOM_ID = process.env.ROOM_ID || "-OvMNH8xsdICOW0tzqa7";
 console.log('✅ Комната:', ROOM_ID);
 
 // --- 4. Права доступа ---
-// Возможные значения: all, vip, mod, vip+mod
 const QR_PERMISSION = (process.env.QR_PERMISSION || "all").toLowerCase();
 console.log('✅ Права для !qr:', QR_PERMISSION);
 
-// --- 5. Подключение к чату ---
+// --- 5. Логотип (по умолчанию стандартный Telegram) ---
+const QR_LOGO_URL = process.env.QR_LOGO_URL || "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/240px-Telegram_logo.svg.png";
+// Можно заменить на свой, указав URL в переменной Railway QR_LOGO_URL
+
+// --- 6. Подключение к чату ---
 const client = new tmi.Client({
   options: { debug: false },
   identity: {
@@ -61,7 +64,7 @@ client.on('connected', (addr, port) => {
   console.log(`🔗 IRC: ${addr}:${port}`);
 });
 
-// --- 6. Проверка прав ---
+// --- 7. Проверка прав ---
 function hasPermission(tags) {
   if (QR_PERMISSION === 'all') return true;
   const badges = tags.badges || {};
@@ -73,7 +76,19 @@ function hasPermission(tags) {
   return false;
 }
 
-// --- 7. Обработка сообщений ---
+// --- 8. Извлечение имени канала из ссылки Telegram ---
+function extractTelegramName(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 't.me' || u.hostname === 'telegram.me') {
+      const name = u.pathname.replace(/\//g, '');
+      return name ? `@${name}` : '';
+    }
+  } catch (e) {}
+  return '';
+}
+
+// --- 9. Обработка сообщений ---
 client.on('message', (channel, tags, message, self) => {
   if (self) return;
 
@@ -85,7 +100,6 @@ client.on('message', (channel, tags, message, self) => {
   // Проверяем права
   if (!hasPermission(tags)) {
     console.log(`⛔ Нет прав у ${tags.username} (badges: ${JSON.stringify(tags.badges)})`);
-    // Бот ничего не пишет в чат, просто игнорирует
     return;
   }
 
@@ -95,17 +109,29 @@ client.on('message', (channel, tags, message, self) => {
     return;
   }
 
-  // ✅ НОВЫЙ РАБОЧИЙ ГЕНЕРАТОР QR (api.qrserver.com)
-  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}`;
+  // Извлекаем название канала для подписи
+  const channelName = extractTelegramName(url) || "Telegram";
+
+  // Генерируем красивый QR через qrcode-monkey
+  const qrImageUrl = `https://api.qrcode-monkey.com/qr/custom?data=${encodeURIComponent(url)}&size=400&file=png&config=${encodeURIComponent(JSON.stringify({
+    body: "circle",
+    eye: "frame13",
+    eyeBall: "ball14",
+    bodyColor: "#0088cc",
+    bgColor: "#ffffff",
+    logo: QR_LOGO_URL,
+    logoMode: "default"
+  }))}`;
+
   console.log('🔗 QR-ссылка:', qrImageUrl);
 
   const qrItem = {
     type: "image",
-    title: "QR-код",
+    title: `QR: ${channelName}`,
     url: qrImageUrl,
     visible: true,
     position: { top: 540, left: 960 },
-    size: { width: 400, height: 400 },
+    size: { width: 400, height: 440 }, // чуть выше для подписи (подпись не рендерим, просто место)
     rotation: 0,
     playing: false,
     volume: 1
@@ -126,7 +152,7 @@ client.on('message', (channel, tags, message, self) => {
     });
 });
 
-// --- 8. Дисконнект ---
+// --- 10. Дисконнект ---
 client.on('disconnected', (reason) => {
   console.log('🔌 Отключён от чата, причина:', reason);
 });
