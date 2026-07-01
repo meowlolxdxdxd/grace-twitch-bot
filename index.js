@@ -7,15 +7,22 @@ if (!serviceAccountJson) {
   console.error('❌ Переменная FIREBASE_SERVICE_ACCOUNT_JSON не задана');
   process.exit(1);
 }
-const serviceAccount = JSON.parse(serviceAccountJson);
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(serviceAccountJson);
+} catch (e) {
+  console.error('❌ Ошибка разбора JSON из FIREBASE_SERVICE_ACCOUNT_JSON:', e.message);
+  process.exit(1);
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://jessew1lliams-obs-overlay-default-rtdb.firebaseio.com"
 });
 const db = admin.database();
+console.log('✅ Firebase инициализирован');
 
-// Настройки Twitch (токен тоже из переменной окружения)
+// Настройки Twitch
 const TWITCH_CHANNEL = "meowlolxdxdxd";
 const BOT_USERNAME = "meowlolxdxdxd";
 const OAUTH_TOKEN = process.env.TWITCH_OAUTH_TOKEN || "";
@@ -23,21 +30,27 @@ if (!OAUTH_TOKEN) {
   console.error('❌ Переменная TWITCH_OAUTH_TOKEN не задана');
   process.exit(1);
 }
-
-const ROOM_ID = "-OvMNH8xsdICOW0tzqa7";
+console.log('✅ Токен Twitch загружен, пытаюсь подключиться...');
 
 const client = new tmi.Client({
-  options: { debug: false },
+  options: { debug: true },
   identity: {
     username: BOT_USERNAME,
     password: OAUTH_TOKEN
   },
   channels: [TWITCH_CHANNEL]
 });
-client.connect().catch(console.error);
+
+client.connect().then(() => {
+  console.log('✅ Бот подключён к чату канала ' + TWITCH_CHANNEL);
+}).catch((err) => {
+  console.error('❌ Ошибка подключения к Twitch:', err.message);
+  process.exit(1);
+});
 
 client.on('message', (channel, tags, message, self) => {
   if (self) return;
+  console.log(`📩 Получено сообщение от ${tags.username}: ${message}`);
 
   const parts = message.trim().split(' ');
   if (parts.length < 2 || parts[0].toLowerCase() !== '!qr') return;
@@ -72,5 +85,15 @@ client.on('message', (channel, tags, message, self) => {
           .catch(console.error);
       }, 15000);
     })
-    .catch(console.error);
+    .catch((err) => {
+      console.error('❌ Ошибка записи в Firebase:', err.message);
+    });
+});
+
+client.on('connected', (address, port) => {
+  console.log(`🔗 Подключён к IRC-серверу ${address}:${port}`);
+});
+
+client.on('disconnected', (reason) => {
+  console.log('🔌 Отключён от чата, причина:', reason);
 });
