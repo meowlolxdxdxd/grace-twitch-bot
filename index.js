@@ -1,23 +1,32 @@
+cat > index.js << 'EOF'
 const tmi = require('tmi.js');
 const admin = require('firebase-admin');
 
-// Подключаем Firebase Admin
-const serviceAccount = require('./service-account.json');
+// Получаем содержимое service-account.json из переменной окружения
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+if (!serviceAccountJson) {
+  console.error('❌ Переменная FIREBASE_SERVICE_ACCOUNT_JSON не задана');
+  process.exit(1);
+}
+const serviceAccount = JSON.parse(serviceAccountJson);
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://jessew1lliams-obs-overlay-default-rtdb.firebaseio.com"
 });
 const db = admin.database();
 
-// Настройки Twitch (токен уже вставлен)
+// Настройки Twitch (токен тоже из переменной окружения)
 const TWITCH_CHANNEL = "meowlolxdxdxd";
 const BOT_USERNAME = "meowlolxdxdxd";
-const OAUTH_TOKEN = "oauth:fj3a3czhba6mfq4wa4ra8r8jahstaz";  // твой Access Token
+const OAUTH_TOKEN = process.env.TWITCH_OAUTH_TOKEN || "";
+if (!OAUTH_TOKEN) {
+  console.error('❌ Переменная TWITCH_OAUTH_TOKEN не задана');
+  process.exit(1);
+}
 
-// Комната оверлея (основная)
 const ROOM_ID = "-OvMNH8xsdICOW0tzqa7";
 
-// Подключаемся к чату
 const client = new tmi.Client({
   options: { debug: false },
   identity: {
@@ -28,20 +37,18 @@ const client = new tmi.Client({
 });
 client.connect().catch(console.error);
 
-// Слушаем сообщения
 client.on('message', (channel, tags, message, self) => {
-  if (self) return; // игнорируем свои сообщения
+  if (self) return;
 
   const parts = message.trim().split(' ');
   if (parts.length < 2 || parts[0].toLowerCase() !== '!qr') return;
 
-  const url = parts.slice(1).join(' '); // ссылка
+  const url = parts.slice(1).join(' ');
   if (!url.startsWith('http')) {
     console.log('❌ Некорректная ссылка');
     return;
   }
 
-  // Генерируем QR-код через Google Charts
   const qrImageUrl = `https://chart.googleapis.com/chart?chs=400x400&cht=qr&chl=${encodeURIComponent(url)}&choe=UTF-8`;
 
   const qrItem = {
@@ -49,19 +56,17 @@ client.on('message', (channel, tags, message, self) => {
     title: "QR-код",
     url: qrImageUrl,
     visible: true,
-    position: { top: 540, left: 960 }, // центр экрана 1920x1080
+    position: { top: 540, left: 960 },
     size: { width: 400, height: 400 },
     rotation: 0,
     playing: false,
     volume: 1
   };
 
-  // Добавляем элемент в Firebase
   const newItemRef = db.ref(`overlay/rooms/${ROOM_ID}/items`).push();
   newItemRef.set(qrItem)
     .then(() => {
       console.log('✅ QR-код добавлен');
-      // Удаляем через 15 секунд
       setTimeout(() => {
         newItemRef.remove()
           .then(() => console.log('🗑️ QR-код удалён'))
@@ -70,3 +75,4 @@ client.on('message', (channel, tags, message, self) => {
     })
     .catch(console.error);
 });
+EOF
