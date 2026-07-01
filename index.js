@@ -1,17 +1,17 @@
 const tmi = require('tmi.js');
 const admin = require('firebase-admin');
 
-// Получаем содержимое service-account.json из переменной окружения
+// --- 1. Firebase ---
 const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 if (!serviceAccountJson) {
-  console.error('❌ Переменная FIREBASE_SERVICE_ACCOUNT_JSON не задана');
+  console.error('❌ Нет переменной FIREBASE_SERVICE_ACCOUNT_JSON');
   process.exit(1);
 }
 let serviceAccount;
 try {
   serviceAccount = JSON.parse(serviceAccountJson);
 } catch (e) {
-  console.error('❌ Ошибка разбора JSON из FIREBASE_SERVICE_ACCOUNT_JSON:', e.message);
+  console.error('❌ Ошибка парсинга JSON из переменной FIREBASE_SERVICE_ACCOUNT_JSON:', e.message);
   process.exit(1);
 }
 
@@ -22,18 +22,24 @@ admin.initializeApp({
 const db = admin.database();
 console.log('✅ Firebase инициализирован');
 
-// Настройки Twitch
+// --- 2. Twitch ---
 const TWITCH_CHANNEL = "meowlolxdxdxd";
 const BOT_USERNAME = "meowlolxdxdxd";
 const OAUTH_TOKEN = process.env.TWITCH_OAUTH_TOKEN || "";
 if (!OAUTH_TOKEN) {
-  console.error('❌ Переменная TWITCH_OAUTH_TOKEN не задана');
+  console.error('❌ Нет переменной TWITCH_OAUTH_TOKEN');
   process.exit(1);
 }
-console.log('✅ Токен Twitch загружен, пытаюсь подключиться...');
 
+// --- 3. Комната оверлея ---
+// Можешь задать ID комнаты в переменной окружения ROOM_ID,
+// иначе используется основная комната.
+const ROOM_ID = process.env.ROOM_ID || "-OvMNH8xsdICOW0tzqa7";
+console.log('✅ Комната:', ROOM_ID);
+
+// --- 4. Подключение к чату ---
 const client = new tmi.Client({
-  options: { debug: true },
+  options: { debug: false },
   identity: {
     username: BOT_USERNAME,
     password: OAUTH_TOKEN
@@ -41,26 +47,34 @@ const client = new tmi.Client({
   channels: [TWITCH_CHANNEL]
 });
 
-client.connect().then(() => {
-  console.log('✅ Бот подключён к чату канала ' + TWITCH_CHANNEL);
-}).catch((err) => {
-  console.error('❌ Ошибка подключения к Twitch:', err.message);
-  process.exit(1);
+client.connect()
+  .then(() => console.log('✅ Бот подключён к чату', TWITCH_CHANNEL))
+  .catch(err => {
+    console.error('❌ Ошибка подключения к Twitch:', err.message);
+    process.exit(1);
+  });
+
+client.on('connected', (addr, port) => {
+  console.log(`🔗 IRC: ${addr}:${port}`);
 });
 
+// --- 5. Обработка сообщений ---
 client.on('message', (channel, tags, message, self) => {
-  if (self) return;
-  console.log(`📩 Получено сообщение от ${tags.username}: ${message}`);
+  if (self) return; // игнорируем свои сообщения
+
+  // Логируем любое сообщение для отладки
+  console.log(`📩 [${tags.username}] ${message}`);
 
   const parts = message.trim().split(' ');
   if (parts.length < 2 || parts[0].toLowerCase() !== '!qr') return;
 
   const url = parts.slice(1).join(' ');
   if (!url.startsWith('http')) {
-    console.log('❌ Некорректная ссылка');
+    console.log('❌ Некорректная ссылка в !qr');
     return;
   }
 
+  console.log('🔗 Генерирую QR для:', url);
   const qrImageUrl = `https://chart.googleapis.com/chart?chs=400x400&cht=qr&chl=${encodeURIComponent(url)}&choe=UTF-8`;
 
   const qrItem = {
@@ -78,22 +92,19 @@ client.on('message', (channel, tags, message, self) => {
   const newItemRef = db.ref(`overlay/rooms/${ROOM_ID}/items`).push();
   newItemRef.set(qrItem)
     .then(() => {
-      console.log('✅ QR-код добавлен');
+      console.log('✅ QR-код добавлен в Firebase');
       setTimeout(() => {
         newItemRef.remove()
           .then(() => console.log('🗑️ QR-код удалён'))
           .catch(console.error);
       }, 15000);
     })
-    .catch((err) => {
+    .catch(err => {
       console.error('❌ Ошибка записи в Firebase:', err.message);
     });
 });
 
-client.on('connected', (address, port) => {
-  console.log(`🔗 Подключён к IRC-серверу ${address}:${port}`);
-});
-
+// --- 6. Обработка дисконнекта ---
 client.on('disconnected', (reason) => {
   console.log('🔌 Отключён от чата, причина:', reason);
 });
