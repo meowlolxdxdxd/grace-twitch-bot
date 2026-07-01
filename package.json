@@ -1,0 +1,11 @@
+{
+  "name": "twitch-qr-bot",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.11.0",
+    "tmi.js": "^1.8.5"
+  }
+}
