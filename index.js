@@ -1,4 +1,3 @@
-cat > index.js << 'EOF'
 const tmi = require('tmi.js');
 const admin = require('firebase-admin');
 
@@ -75,4 +74,3 @@ client.on('message', (channel, tags, message, self) => {
     })
     .catch(console.error);
 });
-EOF
